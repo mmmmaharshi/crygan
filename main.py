@@ -1,6 +1,7 @@
 import base64
 import os
 from collections import Counter
+from hashlib import sha256
 from math import log2
 from multiprocessing import Pool, cpu_count, freeze_support
 
@@ -77,6 +78,18 @@ class Discriminator(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
+
+# === EXPANSION FUNCTION ===
+def expand_key_sha256(seed_bits, target_bits=1_000_000):
+    bits = []
+    current = bytes(seed_bits.tolist())
+    while len(bits) < target_bits:
+        h = sha256(current).digest()
+        chunk = np.unpackbits(np.frombuffer(h, dtype=np.uint8))
+        bits.extend(chunk)
+        current = h
+    return np.array(bits[:target_bits], dtype=np.uint8)
 
 
 # === MAIN LOGIC ===
@@ -168,7 +181,13 @@ def main():
         for i in range(len(entropy_log)):
             f.write(f"{i * 100},{entropy_log[i]},{g_loss_log[i]},{d_loss_log[i]}\n")
 
+    # === EXPAND TO 1M BIT FILE FOR ENT TESTING ===
+    expanded = expand_key_sha256(final_binary, 1_000_000)
+    with open("outputs/keys/gan_expanded_1mbit.bin", "wb") as f:
+        f.write(np.packbits(expanded).tobytes())
+
     print("[✓] All outputs saved to /outputs/")
+    print("[✓] 1Mbit expanded key saved to outputs/keys/gan_expanded_1mbit.bin")
 
 
 # === WINDOWS MULTIPROCESSING GUARD ===
