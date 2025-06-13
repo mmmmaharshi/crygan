@@ -1,1 +1,17 @@
+# Output folders
+outputs/
+outputs_*/
+
+# Virtual Environment
+venv/
+env/
+.env/
 .venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# VS Code
+.vscode/
