@@ -1,5 +1,6 @@
 # Output folders
 outputs/
+outputs/**
 outputs_*/
 
 # Virtual Environment
@@ -15,3 +16,4 @@ __pycache__/
 
 # VS Code
 .vscode/
+

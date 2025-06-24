@@ -1,7 +1,7 @@
 [project]
 name = "crygan"
 version = "0.1.0"
-description = "Add your description here"
+description = "A research-grade system for cryptographic key generation using hybrid entropy from physical chaotic sources and deep generative models."
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [

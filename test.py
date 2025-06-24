@@ -33,10 +33,11 @@ def shannon_entropy(bits):
 
 
 def frequency_monobit(bits):
-    ones = bits.sum()
+    ones = int(bits.sum())
     zeros = len(bits) - ones
-    bias = abs(ones - zeros) / len(bits)
-    s = abs(ones - zeros) / sqrt(len(bits))
+    diff = abs(ones - zeros)
+    bias = diff / len(bits)
+    s = diff / sqrt(len(bits))
     return s, ones, zeros, bias
 
 
