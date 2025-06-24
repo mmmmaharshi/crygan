@@ -18,8 +18,10 @@ latent_dim = 100
 input_bits = 256
 epochs = 3000
 batch_size = 32
-lr = 0.0002
-wav_path = "1-101296-B-19.wav"
+lr = 0.0001
+wav_path = "rain.wav"
+lambda_gp = 10
+critic_iters = 5
 
 
 # === ENTROPY FUNCTIONS ===
@@ -35,16 +37,25 @@ def extract_bits(args):
     return bits[:bit_length]
 
 
-def load_entropy_parallel(path, count=1024, bit_length=256, threshold=0.001):
+def load_entropy_parallel(path, count=2048, bit_length=256, threshold=0.0005):
+    print(f"[🎵] Extracting entropy from: {path}")
     sr, data = wav.read(path)
     if data.dtype == np.int16:
         data = data / 32768.0
     if data.ndim > 1:
         data = data[:, 0]
+
     args_list = [(data, i, bit_length, threshold) for i in range(count)]
+    results = []
     with Pool() as pool:
-        results = pool.map(extract_bits, args_list)
-    return np.array([r for r in results if r is not None])
+        for r in tqdm(
+            pool.imap_unordered(extract_bits, args_list),
+            total=count,
+            desc="[⚙️ ] Entropy Segments",
+        ):
+            if r is not None:
+                results.append(r)
+    return np.array(results)
 
 
 # === MODELS ===
@@ -73,14 +84,37 @@ class Discriminator(nn.Module):
             nn.Linear(512, 256),
             nn.LeakyReLU(0.2),
             nn.Linear(256, 1),
-            nn.Sigmoid(),
         )
 
     def forward(self, x):
         return self.net(x)
 
 
-# === EXPANSION FUNCTION (SERIAL) ===
+# === GRADIENT PENALTY ===
+def compute_gradient_penalty(D, real_samples, fake_samples, device):
+    alpha = torch.rand(real_samples.size(0), 1, device=device)
+    alpha = alpha.expand_as(real_samples)
+
+    interpolates = alpha * real_samples + (1 - alpha) * fake_samples
+    interpolates.requires_grad_(True)
+
+    d_interpolates = D(interpolates)
+    gradients = torch.autograd.grad(
+        outputs=d_interpolates,
+        inputs=interpolates,
+        grad_outputs=torch.ones_like(d_interpolates),
+        create_graph=True,
+        retain_graph=True,
+        only_inputs=True,
+    )[0]
+
+    gradients = gradients.view(real_samples.size(0), -1)
+    gradient_norm = gradients.norm(2, dim=1)
+    penalty = ((gradient_norm - 1) ** 2).mean()
+    return penalty
+
+
+# === EXPANSION FUNCTION ===
 def expand_key_sha256(seed_bits, target_bits=1_000_000):
     bits = []
     current = bytes(seed_bits.tolist())
@@ -95,19 +129,22 @@ def expand_key_sha256(seed_bits, target_bits=1_000_000):
 # === MAIN LOGIC ===
 def main():
     torch.set_num_threads(cpu_count())
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    print(f"[🧠] Device: {device}")
+    print(f"[🔧] CPU Cores Used: {cpu_count()}")
+
     os.makedirs("outputs/keys", exist_ok=True)
     os.makedirs("outputs/logs", exist_ok=True)
 
     real_keys = load_entropy_parallel(wav_path)
     print(f"[✓] Loaded {real_keys.shape[0]} samples × {real_keys.shape[1]} bits")
+    print("[🚀] Starting WGAN-GP Training...")
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     G = Generator().to(device)
     D = Discriminator().to(device)
 
-    opt_G = optim.Adam(G.parameters(), lr=lr, betas=(0.5, 0.999))
-    opt_D = optim.Adam(D.parameters(), lr=lr, betas=(0.5, 0.999))
-    criterion = nn.BCELoss()
+    opt_G = optim.Adam(G.parameters(), lr=lr, betas=(0.5, 0.9))
+    opt_D = optim.Adam(D.parameters(), lr=lr, betas=(0.5, 0.9))
 
     real_tensor = torch.tensor(real_keys.astype(np.float32), device=device)
     real_tensor = real_tensor * 2 - 1
@@ -122,25 +159,32 @@ def main():
     d_loss_log = []
     final_binary = None
 
-    for epoch in tqdm(range(epochs)):
-        idx = np.random.randint(0, real_tensor.shape[0], batch_size)
-        real_batch = real_tensor[idx]
+    D_loss = torch.tensor(0.0)
+    G_loss = torch.tensor(0.0)
 
-        z = torch.randn(batch_size, latent_dim, device=device)
-        fake_batch = G(z).detach()
-        real_labels = torch.ones(batch_size, 1, device=device)
-        fake_labels = torch.zeros(batch_size, 1, device=device)
+    progress = tqdm(range(epochs), desc="Epochs")
+    for epoch in progress:
+        for _ in range(critic_iters):
+            idx = np.random.randint(0, real_tensor.shape[0], batch_size)
+            real_batch = real_tensor[idx]
 
-        D_loss = criterion(D(real_batch), real_labels) + criterion(
-            D(fake_batch), fake_labels
-        )
-        opt_D.zero_grad()
-        D_loss.backward()
-        opt_D.step()
+            z = torch.randn(batch_size, latent_dim, device=device)
+            fake_batch = G(z).detach()
+
+            d_real = D(real_batch)
+            d_fake = D(fake_batch)
+
+            gp = compute_gradient_penalty(D, real_batch, fake_batch, device)
+            D_loss = -d_real.mean() + d_fake.mean() + lambda_gp * gp
+
+            opt_D.zero_grad()
+            D_loss.backward()
+            opt_D.step()
 
         z = torch.randn(batch_size, latent_dim, device=device)
         fake_batch = G(z)
-        G_loss = criterion(D(fake_batch), real_labels)
+        G_loss = -D(fake_batch).mean()
+
         opt_G.zero_grad()
         G_loss.backward()
         opt_G.step()
@@ -150,16 +194,22 @@ def main():
             with torch.no_grad():
                 sample = G(z).squeeze().cpu().numpy()
             binary = (sample > 0).astype(np.uint8)
-            entropy_log.append(shannon_entropy(binary))
+            ent = shannon_entropy(binary)
+            entropy_log.append(ent)
             g_loss_log.append(G_loss.item())
             d_loss_log.append(D_loss.item())
             final_binary = binary
+            progress.set_description(
+                f"Epochs [D={D_loss.item():.3f}, G={G_loss.item():.3f}, H={ent:.4f}]"
+            )
 
     if final_binary is None:
         z = torch.randn(1, latent_dim, device=device)
         with torch.no_grad():
             sample = G(z).squeeze().cpu().numpy()
         final_binary = (sample > 0).astype(np.uint8)
+
+    print(f"[📦] Final binary entropy: {shannon_entropy(final_binary):.4f}")
 
     np.save("outputs/keys/gan_generated_key.npy", final_binary)
     with open("outputs/keys/gan_generated_key.bin", "wb") as f:
@@ -177,12 +227,13 @@ def main():
         for i in range(len(entropy_log)):
             f.write(f"{i * 100},{entropy_log[i]},{g_loss_log[i]},{d_loss_log[i]}\n")
 
+    print("[📡] Expanding key to 1M bits via SHA-256...")
     expanded = expand_key_sha256(final_binary, 1_000_000)
     with open("outputs/keys/gan_expanded_1mbit.bin", "wb") as f:
         f.write(np.packbits(expanded).tobytes())
 
+    print("[✅] 1Mbit expanded key saved to outputs/keys/gan_expanded_1mbit.bin")
     print("[✓] All outputs saved to /outputs/")
-    print("[✓] 1Mbit expanded key saved to outputs/keys/gan_expanded_1mbit.bin")
 
 
 # === WINDOWS MULTIPROCESSING GUARD ===
