@@ -80,7 +80,7 @@ class Discriminator(nn.Module):
         return self.net(x)
 
 
-# === EXPANSION FUNCTION ===
+# === EXPANSION FUNCTION (SERIAL) ===
 def expand_key_sha256(seed_bits, target_bits=1_000_000):
     bits = []
     current = bytes(seed_bits.tolist())
@@ -155,7 +155,6 @@ def main():
             d_loss_log.append(D_loss.item())
             final_binary = binary
 
-    # === FINAL OUTPUT ===
     if final_binary is None:
         z = torch.randn(1, latent_dim, device=device)
         with torch.no_grad():
@@ -163,13 +162,10 @@ def main():
         final_binary = (sample > 0).astype(np.uint8)
 
     np.save("outputs/keys/gan_generated_key.npy", final_binary)
-
     with open("outputs/keys/gan_generated_key.bin", "wb") as f:
         f.write(np.packbits(final_binary).tobytes())
-
     with open("outputs/keys/key.hex", "w") as f:
         f.write("".join(map(str, final_binary)))
-
     with open("outputs/keys/key.b64", "w") as f:
         f.write(base64.b64encode(np.packbits(final_binary)).decode())
 
@@ -181,7 +177,6 @@ def main():
         for i in range(len(entropy_log)):
             f.write(f"{i * 100},{entropy_log[i]},{g_loss_log[i]},{d_loss_log[i]}\n")
 
-    # === EXPAND TO 1M BIT FILE FOR ENT TESTING ===
     expanded = expand_key_sha256(final_binary, 1_000_000)
     with open("outputs/keys/gan_expanded_1mbit.bin", "wb") as f:
         f.write(np.packbits(expanded).tobytes())
