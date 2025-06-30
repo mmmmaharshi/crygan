@@ -117,17 +117,16 @@ def compute_gradient_penalty(D, real_samples, fake_samples, device):
 
 
 # === EXPANSION FUNCTION ===
-def expand_key_hkdf(seed_bits, target_bits=1_000_000):
+def expand_key_hkdf(seed_bits, target_bits=1_000_000, salt=None):
     """
-    Expands a seed into a longer key using the industry-standard HKDF.
-    This is more secure than a simple hash loop.
+    Expands a seed using HKDF. If salt is None, generate a random one.
+    Returns: (expanded_bits, used_salt)
     """
     seed_bytes = np.packbits(seed_bits).tobytes()
     target_bytes = (target_bits + 7) // 8
 
-    # A salt should ideally be a random value, but we use a fixed one here
-    # for reproducibility. In a production system, generate a fresh random salt.
-    salt = b"CryGAN-HKDF-Salt-v1"
+    if salt is None:
+        salt = os.urandom(16)  # 128-bit random salt
 
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
@@ -137,7 +136,7 @@ def expand_key_hkdf(seed_bits, target_bits=1_000_000):
     )
     derived_key = hkdf.derive(seed_bytes)
     expanded_bits = np.unpackbits(np.frombuffer(derived_key, dtype=np.uint8))
-    return expanded_bits[:target_bits]
+    return expanded_bits[:target_bits], salt
 
 
 # === MAIN LOGIC ===
@@ -243,9 +242,12 @@ def main():
             f.write(f"{i * 100},{entropy_log[i]},{g_loss_log[i]},{d_loss_log[i]}\n")
 
     print("[📡] Expanding key to 1M bits via SHA-256...")
-    expanded = expand_key_hkdf(final_binary, 1_000_000)
+    expanded, salt = expand_key_hkdf(final_binary, 1_000_000)
     with open("outputs/keys/gan_expanded_1mbit.bin", "wb") as f:
         f.write(np.packbits(expanded).tobytes())
+
+    with open("outputs/keys/salt.bin", "wb") as f:
+        f.write(salt)
 
     print("[✅] 1Mbit expanded key saved to outputs/keys/gan_expanded_1mbit.bin")
     print("[✓] All outputs saved to /outputs/")
