@@ -12,8 +12,9 @@ import scipy.io.wavfile as wav
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes
-from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.hmac import HMAC
 from tqdm import tqdm
 
 # === CONFIG ===
@@ -129,17 +130,28 @@ def shannon_entropy(bits):
 
 def expand_key_hkdf(seed_bits, target_bits=1_000_000, salt=None):
     seed_bytes = np.packbits(seed_bits).tobytes()
-    target_bytes = (target_bits + 7) // 8
     if salt is None:
         salt = os.urandom(16)
-    hkdf = HKDF(
-        algorithm=hashes.SHA256(),
-        length=target_bytes,
-        salt=salt,
-        info=b"gan-key-expansion",
-    )
-    derived_key = hkdf.derive(seed_bytes)
-    expanded_bits = np.unpackbits(np.frombuffer(derived_key, dtype=np.uint8))
+
+    # === HKDF-Extract ===
+    h = HMAC(salt, hashes.SHA256(), backend=default_backend())
+    h.update(seed_bytes)
+    prk = h.finalize()
+
+    # === HKDF-Expand ===
+    output = bytearray()
+    prev = b""
+    counter = 1
+    info = b"gan-key-expansion"
+    while len(output) < (target_bits + 7) // 8:
+        h = HMAC(prk, hashes.SHA256(), backend=default_backend())
+        h.update(prev + info + bytes([counter]))
+        prev = h.finalize()
+        output.extend(prev)
+        counter += 1
+
+    final_bytes = bytes(output[: (target_bits + 7) // 8])
+    expanded_bits = np.unpackbits(np.frombuffer(final_bytes, dtype=np.uint8))
     return expanded_bits[:target_bits], salt
 
 
