@@ -11,6 +11,8 @@ import scipy.io.wavfile as wav
 import torch
 import torch.nn as nn
 import torch.optim as optim
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from tqdm import tqdm
 
 # === CONFIG ===
@@ -25,16 +27,18 @@ critic_iters = 5
 
 
 # === ENTROPY FUNCTIONS ===
-def extract_bits(args):
-    data, i, bit_length, threshold = args
-    start = i * bit_length * 4
-    end = start + bit_length * 4
+def extract_bits_hashed(args):
+    """
+    A more secure entropy extraction method.
+    Hashes a segment of audio data to produce a 256-bit block of entropy.
+    This removes biases and uses the full complexity of the audio segment.
+    """
+    data, i, segment_len_samples = args
+    start = i * segment_len_samples
+    end = start + segment_len_samples
     segment = data[start:end]
-    if len(segment) < bit_length * 4:
-        return None
-    segment = segment - np.mean(segment)
-    bits = (segment > threshold).astype(np.uint8)
-    return bits[:bit_length]
+    h = sha256(segment.tobytes()).digest()
+    return np.unpackbits(np.frombuffer(h, dtype=np.uint8))
 
 
 def load_entropy_parallel(path, count=2048, bit_length=256, threshold=0.0005):
@@ -45,11 +49,13 @@ def load_entropy_parallel(path, count=2048, bit_length=256, threshold=0.0005):
     if data.ndim > 1:
         data = data[:, 0]
 
-    args_list = [(data, i, bit_length, threshold) for i in range(count)]
+    # Each segment should have enough data to be unique. 1024 samples is a good start.
+    segment_len_samples = 1024
+    args_list = [(data, i, segment_len_samples) for i in range(count)]
     results = []
     with Pool() as pool:
         for r in tqdm(
-            pool.imap_unordered(extract_bits, args_list),
+            pool.imap_unordered(extract_bits_hashed, args_list),
             total=count,
             desc="[⚙️ ] Entropy Segments",
         ):
@@ -115,21 +121,27 @@ def compute_gradient_penalty(D, real_samples, fake_samples, device):
 
 
 # === EXPANSION FUNCTION ===
-def expand_key_sha256(seed_bits, target_bits=1_000_000):
-    bits = []
-    current = bytes(seed_bits.tolist())
-    while len(bits) < target_bits:
-        h = sha256(current).digest()
-        chunk = np.unpackbits(np.frombuffer(h, dtype=np.uint8))
-        bits.extend(chunk)
-        current = h
-    return np.array(bits[:target_bits], dtype=np.uint8)
+def expand_key_hkdf(seed_bits, target_bits=1_000_000):
+    """
+    Expands a seed into a longer key using the industry-standard HKDF.
+    This is more secure than a simple hash loop.
+    """
+    seed_bytes = np.packbits(seed_bits).tobytes()
+    target_bytes = (target_bits + 7) // 8
 
+    # A salt should ideally be a random value, but we use a fixed one here
+    # for reproducibility. In a production system, generate a fresh random salt.
+    salt = b"CryGAN-HKDF-Salt-v1"
 
-def shannon_entropy(bits):
-    c = Counter(bits)
-    total = len(bits)
-    return -sum((f / total) * log2(f / total) for f in c.values())
+    hkdf = HKDF(
+        algorithm=hashes.SHA256(),
+        length=target_bytes,
+        salt=salt,
+        info=b"gan-key-expansion",
+    )
+    derived_key = hkdf.derive(seed_bytes)
+    expanded_bits = np.unpackbits(np.frombuffer(derived_key, dtype=np.uint8))
+    return expanded_bits[:target_bits]
 
 
 # === MAIN LOGIC ===
@@ -144,6 +156,12 @@ def main():
 
     real_keys = load_entropy_parallel(wav_path)
     print(f"[✓] Loaded {real_keys.shape[0]} samples × {real_keys.shape[1]} bits")
+
+    def shannon_entropy(bits):
+        c = Counter(bits)
+        total = len(bits)
+        return -sum((f / total) * log2(f / total) for f in c.values())
+
     print("[🚀] Starting WGAN-GP Training...")
 
     G = Generator().to(device)
@@ -229,7 +247,7 @@ def main():
             f.write(f"{i * 100},{entropy_log[i]},{g_loss_log[i]},{d_loss_log[i]}\n")
 
     print("[📡] Expanding key to 1M bits via SHA-256...")
-    expanded = expand_key_sha256(final_binary, 1_000_000)
+    expanded = expand_key_hkdf(final_binary, 1_000_000)
     with open("outputs/keys/gan_expanded_1mbit.bin", "wb") as f:
         f.write(np.packbits(expanded).tobytes())
 
