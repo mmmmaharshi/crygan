@@ -1,5 +1,6 @@
 import base64
 import os
+import random
 from collections import Counter
 from hashlib import sha256
 from math import log2
@@ -24,9 +25,21 @@ lr = 0.0001
 lambda_gp = 10
 critic_iters = 5
 entropy_sources = ["rain.wav", "traffic.wav"]
+seed = 42
+checkpoint_path = "outputs/checkpoints"
+output_path = "outputs/keys"
 
 
-# === ENTROPY FUNCTIONS ===
+# === REPRODUCIBILITY ===
+def set_seed(seed):
+    torch.manual_seed(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+
+
+# === ENTROPY EXTRACTION ===
 def extract_bits_hashed(args):
     data, i, segment_len_samples = args
     start = i * segment_len_samples
@@ -53,10 +66,9 @@ def load_entropy(paths, count_per_file=1024):
             for r in tqdm(
                 pool.imap_unordered(extract_bits_hashed, args_list),
                 total=count_per_file,
-                desc=f"[⚙️ ] Segments from {os.path.basename(path)}",
+                desc=f"[⚙️ ] {os.path.basename(path)} segments",
             ):
-                if r is not None:
-                    all_segments.append(r)
+                all_segments.append(r)
     return np.array(all_segments)
 
 
@@ -92,14 +104,11 @@ class Discriminator(nn.Module):
         return self.net(x)
 
 
-# === GRADIENT PENALTY ===
-def compute_gradient_penalty(D, real_samples, fake_samples, device):
-    alpha = torch.rand(real_samples.size(0), 1, device=device)
-    alpha = alpha.expand_as(real_samples)
-
-    interpolates = alpha * real_samples + (1 - alpha) * fake_samples
+# === UTILITIES ===
+def compute_gradient_penalty(D, real, fake, device):
+    alpha = torch.rand(real.size(0), 1, device=device).expand_as(real)
+    interpolates = alpha * real + (1 - alpha) * fake
     interpolates.requires_grad_(True)
-
     d_interpolates = D(interpolates)
     gradients = torch.autograd.grad(
         outputs=d_interpolates,
@@ -109,25 +118,20 @@ def compute_gradient_penalty(D, real_samples, fake_samples, device):
         retain_graph=True,
         only_inputs=True,
     )[0]
-
-    gradients = gradients.view(real_samples.size(0), -1)
-    gradient_norm = gradients.norm(2, dim=1)
-    penalty = ((gradient_norm - 1) ** 2).mean()
-    return penalty
+    return ((gradients.norm(2, dim=1) - 1) ** 2).mean()
 
 
-# === EXPANSION FUNCTION ===
+def shannon_entropy(bits):
+    c = Counter(bits)
+    total = len(bits)
+    return -sum((f / total) * log2(f / total) for f in c.values())
+
+
 def expand_key_hkdf(seed_bits, target_bits=1_000_000, salt=None):
-    """
-    Expands a seed using HKDF. If salt is None, generate a random one.
-    Returns: (expanded_bits, used_salt)
-    """
     seed_bytes = np.packbits(seed_bits).tobytes()
     target_bytes = (target_bits + 7) // 8
-
     if salt is None:
-        salt = os.urandom(16)  # 128-bit random salt
-
+        salt = os.urandom(16)
     hkdf = HKDF(
         algorithm=hashes.SHA256(),
         length=target_bytes,
@@ -139,68 +143,55 @@ def expand_key_hkdf(seed_bits, target_bits=1_000_000, salt=None):
     return expanded_bits[:target_bits], salt
 
 
-# === MAIN LOGIC ===
+def save_checkpoint(G, D, epoch):
+    os.makedirs(checkpoint_path, exist_ok=True)
+    torch.save(
+        {"G": G.state_dict(), "D": D.state_dict(), "epoch": epoch},
+        os.path.join(checkpoint_path, f"ckpt_epoch_{epoch}.pt"),
+    )
+
+
+# === MAIN ===
 def main():
+    set_seed(seed)
     torch.set_num_threads(cpu_count())
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    print(f"[🧠] Device: {device}")
-    print(f"[🔧] CPU Cores Used: {cpu_count()}")
 
-    os.makedirs("outputs/keys", exist_ok=True)
+    os.makedirs(output_path, exist_ok=True)
     os.makedirs("outputs/logs", exist_ok=True)
 
     real_keys = load_entropy(entropy_sources, count_per_file=1024)
-    print(f"[✓] Loaded {real_keys.shape[0]} samples × {real_keys.shape[1]} bits")
+    print(f"[✓] Loaded {real_keys.shape[0]} × {real_keys.shape[1]} bits")
 
-    def shannon_entropy(bits):
-        c = Counter(bits)
-        total = len(bits)
-        return -sum((f / total) * log2(f / total) for f in c.values())
-
-    print("[🚀] Starting WGAN-GP Training...")
-
-    G = Generator().to(device)
-    D = Discriminator().to(device)
-
+    G, D = Generator().to(device), Discriminator().to(device)
     opt_G = optim.Adam(G.parameters(), lr=lr, betas=(0.5, 0.9))
     opt_D = optim.Adam(D.parameters(), lr=lr, betas=(0.5, 0.9))
 
-    real_tensor = torch.tensor(real_keys.astype(np.float32), device=device)
-    real_tensor = real_tensor * 2 - 1
-
-    entropy_log = []
-    g_loss_log = []
-    d_loss_log = []
+    real_tensor = torch.tensor(real_keys.astype(np.float32), device=device) * 2 - 1
     final_binary = None
-
+    entropy_log, g_loss_log, d_loss_log = [], [], []
     D_loss = torch.tensor(0.0)
     G_loss = torch.tensor(0.0)
 
+    print("[🚀] Starting WGAN-GP Training...")
     progress = tqdm(range(epochs), desc="Epochs")
     for epoch in progress:
         for _ in range(critic_iters):
             idx = np.random.randint(0, real_tensor.shape[0], batch_size)
             real_batch = real_tensor[idx]
-
             z = torch.randn(batch_size, latent_dim, device=device)
             fake_batch = G(z).detach()
-
-            d_real = D(real_batch)
-            d_fake = D(fake_batch)
-
             gp = compute_gradient_penalty(D, real_batch, fake_batch, device)
-            D_loss = -d_real.mean() + d_fake.mean() + lambda_gp * gp
-
+            loss_D = -D(real_batch).mean() + D(fake_batch).mean() + lambda_gp * gp
             opt_D.zero_grad()
-            D_loss.backward()
+            loss_D.backward()
             opt_D.step()
 
         z = torch.randn(batch_size, latent_dim, device=device)
         fake_batch = G(z)
-        G_loss = -D(fake_batch).mean()
-
+        loss_G = -D(fake_batch).mean()
         opt_G.zero_grad()
-        G_loss.backward()
+        loss_G.backward()
         opt_G.step()
 
         if epoch % 100 == 0:
@@ -220,40 +211,37 @@ def main():
     if final_binary is None:
         z = torch.randn(1, latent_dim, device=device)
         with torch.no_grad():
-            sample = G(z).squeeze().cpu().numpy()
-        final_binary = (sample > 0).astype(np.uint8)
+            final_binary = (G(z).squeeze().cpu().numpy() > 0).astype(np.uint8)
 
-    print(f"[📦] Final binary entropy: {shannon_entropy(final_binary):.4f}")
+    print(f"[📦] Final entropy: {shannon_entropy(final_binary):.4f}")
 
-    np.save("outputs/keys/gan_generated_key.npy", final_binary)
-    with open("outputs/keys/gan_generated_key.bin", "wb") as f:
+    np.save(os.path.join(output_path, "gan_generated_key.npy"), final_binary)
+    with open(os.path.join(output_path, "gan_generated_key.bin"), "wb") as f:
         f.write(np.packbits(final_binary).tobytes())
-    with open("outputs/keys/key.hex", "w") as f:
+    with open(os.path.join(output_path, "key.hex"), "w") as f:
         f.write("".join(map(str, final_binary)))
-    with open("outputs/keys/key.b64", "w") as f:
+    with open(os.path.join(output_path, "key.b64"), "w") as f:
         f.write(base64.b64encode(np.packbits(final_binary)).decode())
 
-    img = qrcode.make(base64.b64encode(np.packbits(final_binary)).decode())
-    img.get_image().save("outputs/keys/key_qr.png")
+    qrcode.make(base64.b64encode(np.packbits(final_binary)).decode()).get_image().save(
+        os.path.join(output_path, "key_qr.png")
+    )
 
     with open("outputs/logs/training_metrics.csv", "w") as f:
         f.write("Epoch,Entropy,G_Loss,D_Loss\n")
         for i in range(len(entropy_log)):
             f.write(f"{i * 100},{entropy_log[i]},{g_loss_log[i]},{d_loss_log[i]}\n")
 
-    print("[📡] Expanding key to 1M bits via SHA-256...")
     expanded, salt = expand_key_hkdf(final_binary, 1_000_000)
-    with open("outputs/keys/gan_expanded_1mbit.bin", "wb") as f:
+    with open(os.path.join(output_path, "gan_expanded_1mbit.bin"), "wb") as f:
         f.write(np.packbits(expanded).tobytes())
-
-    with open("outputs/keys/salt.bin", "wb") as f:
+    with open(os.path.join(output_path, "salt.bin"), "wb") as f:
         f.write(salt)
 
-    print("[✅] 1Mbit expanded key saved to outputs/keys/gan_expanded_1mbit.bin")
+    print("[✅] 1Mbit expanded key saved.")
     print("[✓] All outputs saved to /outputs/")
 
 
-# === WINDOWS MULTIPROCESSING GUARD ===
 if __name__ == "__main__":
     freeze_support()
     main()
