@@ -126,6 +126,12 @@ def expand_key_sha256(seed_bits, target_bits=1_000_000):
     return np.array(bits[:target_bits], dtype=np.uint8)
 
 
+def shannon_entropy(bits):
+    c = Counter(bits)
+    total = len(bits)
+    return -sum((f / total) * log2(f / total) for f in c.values())
+
+
 # === MAIN LOGIC ===
 def main():
     torch.set_num_threads(cpu_count())
@@ -148,11 +154,6 @@ def main():
 
     real_tensor = torch.tensor(real_keys.astype(np.float32), device=device)
     real_tensor = real_tensor * 2 - 1
-
-    def shannon_entropy(bits):
-        c = Counter(bits)
-        total = len(bits)
-        return -sum((f / total) * log2(f / total) for f in c.values())
 
     entropy_log = []
     g_loss_log = []

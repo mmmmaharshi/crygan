@@ -6,6 +6,7 @@ from math import log2, sqrt
 
 import numpy as np
 from scipy.stats import chisquare
+from randtest import random_score
 
 from randomness_testsuite import (
     ApproximateEntropy,
@@ -29,7 +30,7 @@ def load_key_bin(path):
 def shannon_entropy(bits):
     c = Counter(bits)
     total = len(bits)
-    return -sum((freq / total) * log2(freq / total) for freq in c.values())
+    return -sum((v / total) * log2(v / total) for v in c.values())
 
 
 def frequency_monobit(bits):
@@ -58,8 +59,29 @@ def chi_square_stat(bits):
     return chi, p
 
 
+def bientropy(bits):
+    if isinstance(bits, list):
+        bits = np.array(bits)
+    n = len(bits)
+    if n < 2:
+        return 0
+    e = 0
+    current = bits.copy()
+    for i in range(n.bit_length() - 1):
+        p1 = np.sum(current) / len(current)
+        p0 = 1 - p1
+        h = 0
+        if p0 > 0:
+            h -= p0 * log2(p0)
+        if p1 > 0:
+            h -= p1 * log2(p1)
+        e += h
+        current = np.bitwise_xor(current[:-1], current[1:])
+    return e / (n.bit_length() - 1)
+
+
 def log_test_result(name, pval, passed, note=""):
-    if passed is None and note:
+    if passed is None:
         print(f"-  {name:<40}: {note}")
     else:
         status = "[PASSED]" if passed else "[FAILED]"
@@ -72,65 +94,72 @@ def run_nist_test(name, fn, bitstr):
         p = fn(bitstr)
         if name in ("Random Excursion", "Random Excursion Variant"):
             if isinstance(p, (list, tuple)) and isinstance(p[0], str):
-                if "too small" in p[0].lower() or "j < 500" in p[0].lower():
-                    return name, None, None, "Skipped: J < 500"
+                return name, None, None, "Skipped: J < 500"
         pval = None
         if isinstance(p, (list, tuple)):
-            flat = []
-            for item in p:
-                if isinstance(item, (float, int)):
-                    flat.append(item)
-                elif isinstance(item, (list, tuple)):
-                    flat += [v for v in item if isinstance(v, (float, int))]
+            flat = [
+                x
+                for part in p
+                for x in (part if isinstance(part, (list, tuple)) else [part])
+                if isinstance(x, (int, float))
+            ]
             if flat:
                 pval = flat[0]
-        elif isinstance(p, (float, int)):
+        elif isinstance(p, (int, float)):
             pval = p
-        passed = (pval is not None) and (pval >= 0.01)
+        passed = pval is not None and pval >= 0.01
         note = ""
     except Exception as e:
         pval = None
         msg = str(e).lower()
         if "insufficient data" in msg or "bits required" in msg:
             note = "Insufficient bits"
-        elif "j too small" in msg or "j < 500" in msg:
-            note = "Skipped: J < 500"
-            return name, None, None, note
+        elif "j < 500" in msg:
+            return name, None, None, "Skipped: J < 500"
         else:
-            note = str(e)
+            note = msg
         passed = False
     return name, pval, passed, note
 
 
 def main():
+    start_time = time.time()
     path = "outputs/keys/gan_expanded_1mbit.bin"
     if not os.path.exists(path):
         print(f"[✗] Missing key file: {path}")
         return
 
-    t0 = time.time()
     bits = load_key_bin(path)
-    print(f"[✓] Loaded {len(bits)} bits")
+    print(f"[✓] Loaded {len(bits)} bits\n")
 
-    print("\n[📊] Basic Key Strength Tests")
+    # Quick Tests
+    print("[⚡] Quick Randomness Checks")
+    rand_score = random_score(bits)
+    bien = bientropy(bits)
+    print(f"🔹 randtest score         : {rand_score}")
+    print(f"🔹 BiEntropy              : {bien:.6f}\n")
+
+    # Basic Tests
+    print("[📊] Basic Key Strength Tests")
     entropy = shannon_entropy(bits)
     s, ones, zeros, bias = frequency_monobit(bits)
     r, exp_r, runs_diff = runs_stat(bits)
     chi, p_chi = chi_square_stat(bits)
 
     basic = [
-        ("Shannon Entropy", entropy, entropy >= 0.997, "≥0.997"),
-        ("Monobit Bias", bias, bias <= 0.01, f"ones={ones},zeros={zeros}"),
-        ("Runs Deviation", runs_diff, runs_diff <= 0.01, f"runs={r},exp≈{int(exp_r)}"),
-        ("Chi-Square p", p_chi, p_chi >= 0.05, "≥0.05"),
+        ("Shannon Entropy", entropy, entropy >= 0.997, "threshold ≥ 0.997"),
+        ("Monobit Bias", bias, bias <= 0.01, f"ones={ones}, zeros={zeros}"),
+        ("Runs Deviation", runs_diff, runs_diff <= 0.01, f"runs={r}, exp≈{int(exp_r)}"),
+        ("Chi‑Square p", p_chi, p_chi >= 0.05, "threshold ≥ 0.05"),
     ]
-    passed_basic = 0
+    passed_basic = sum(ok for _, _, ok, _ in basic)
     for name, val, ok, note in basic:
-        log_test_result(name, val, ok, note if not ok else "")
-        passed_basic += ok
+        log_test_result(name, val, ok, "" if ok else note)
+    print()
 
-    print("\n[🧪] NIST SP800-22 Full Test Battery (randomness_testsuite)")
-    bitstr = "".join(map(str, bits[:2000000]))
+    # NIST SP800‑22
+    print("[🧪] NIST SP800‑22 Full Battery")
+    bitstr = "".join(map(str, bits[:2_000_000]))
     suite = [
         ("Monobit", FrequencyTest.FrequencyTest.monobit_test),
         ("Block Frequency", FrequencyTest.FrequencyTest.block_frequency),
@@ -157,27 +186,23 @@ def main():
         ("Random Excursion Variant", RandomExcursions.RandomExcursions.variant_test),
     ]
 
-    passed_suite = 0
-    results = []
-    with ProcessPoolExecutor() as executor:
-        futures = [
-            executor.submit(run_nist_test, name, fn, bitstr) for name, fn in suite
-        ]
-        for f in futures:
-            result = f.result()
-            results.append(result)
+    with ProcessPoolExecutor() as exec:
+        futures = [exec.submit(run_nist_test, name, fn, bitstr) for name, fn in suite]
+        results = [f.result() for f in futures]
 
+    passed_suite = sum(1 for _, _, ok, _ in results if ok)
     for name, pval, ok, note in results:
-        log_test_result(name, pval, ok, note if not ok else "")
-        if ok:
-            passed_suite += 1
+        log_test_result(name, pval, ok, note)
 
-    total_time = time.time() - t0
-    print(f"\n[📋] Basic: 4 total, {passed_basic} passed, {4 - passed_basic} failed")
+    total_time = time.time() - start_time
+
+    print(f"\n📋 Basic: 4 total, {passed_basic} passed, {4 - passed_basic} failed")
+    n_fail = sum(1 for _, _, ok, _ in results if ok is False)
+    n_skip = sum(1 for _, _, ok, _ in results if ok is None)
     print(
-        f"[📋] NIST: {len(suite)} total, {passed_suite} passed, {len([r for r in results if r[2] is False])} failed, {len([r for r in results if r[2] is None])} skipped"
+        f"📋 NIST: {len(suite)} total, {passed_suite} passed, {n_fail} failed, {n_skip} skipped"
     )
-    print(f"[⏱️] Total runtime: {total_time:.2f} sec")
+    print(f"⏱ Total runtime: {total_time:.2f} sec")
 
 
 if __name__ == "__main__":
