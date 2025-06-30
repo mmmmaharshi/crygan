@@ -1,10 +1,12 @@
 import os
 import time
 from collections import Counter
-from concurrent.futures import ProcessPoolExecutor
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from math import log2, sqrt
+from multiprocessing import freeze_support
 
 import numpy as np
+from pyentrp import entropy as ent
 from randtest import random_score
 from scipy.stats import chisquare
 
@@ -335,6 +337,62 @@ def maurer_universal_test(bits, L=7, Q=1280, K=512):
     return fn, z
 
 
+def print_boxed(title, lines, color=None):
+    # Simple ASCII box with optional color
+    width = max(len(title), *(len(line) for line in lines)) + 4
+    top = f"┏{'━' * (width - 2)}┓"
+    mid = f"┃ {title.center(width - 4)} ┃"
+    sep = f"┣{'━' * (width - 2)}┫"
+    body = [f"┃ {line.ljust(width - 4)} ┃" for line in lines]
+    bot = f"┗{'━' * (width - 2)}┛"
+    box = [top, mid, sep] + body + [bot]
+    if color:
+        try:
+            from termcolor import colored
+
+            return "\n".join(colored(line, color) for line in box)
+        except ImportError:
+            pass
+    return "\n".join(box)
+
+
+def log_test_result_tabular(name, pval, passed, note=""):
+    status = "[PASS]" if passed else ("[FAIL]" if passed is False else "[SKIP")
+    pstr = f"{pval:.6f}" if pval is not None else "-"
+    print(f"│ {name:<28} │ {pstr:^10} │ {status:^7} │ {note:<30} │")
+
+
+def print_boxed_header(title, width=60, symbol="═"):
+    print(f"\n╔{symbol * (width - 2)}╗")
+    print(f"║ {title.center(width - 4)} ║")
+    print(f"╚{symbol * (width - 2)}╝")
+
+
+def print_table(rows, headers=None, width=60):
+    # rows: list of tuples (name, value, pass, note)
+    col_widths = [max(len(str(x)) for x in col) for col in zip(*(headers or rows))]
+    if headers:
+        print(
+            "│ " + " │ ".join(f"{h:<{w}}" for h, w in zip(headers, col_widths)) + " │"
+        )
+        print("├" + "─".join("─" * (w + 2) for w in col_widths) + "┤")
+    for row in rows:
+        print(
+            "│ " + " │ ".join(f"{str(x):<{w}}" for x, w in zip(row, col_widths)) + " │"
+        )
+
+
+def log_test_result_table(results, width=60):
+    headers = ["Test", "Value", "Result", "Notes"]
+    print_table(results, headers, width)
+
+
+def status_str(passed):
+    if passed is None:
+        return "SKIP"
+    return "PASS" if passed else "FAIL"
+
+
 def main():
     start_time = time.time()
     path = "outputs/keys/gan_expanded_1mbit.bin"
@@ -343,70 +401,97 @@ def main():
         return
 
     bits = load_key_bin(path)
-    print(f"[✓] Loaded {len(bits)} bits\n")
+    print(f"Loaded {len(bits)} bits\n")
 
-    # Quick Tests
-    print("[⚡] Quick Randomness Checks")
-    rand_score = random_score(bits)
-    bien = bientropy(bits)
-    minent = min_entropy(bits)
-    collent = collision_entropy(bits)
-    hartley = hartley_entropy(bits)
-    renyi2 = renyi_entropy(bits, alpha=2)
-    tsallis2 = tsallis_entropy(bits, q=2)
-    perm_ent = permutation_entropy(bits, order=3)
-    samp_ent = sample_entropy(bits, m=2)
-    guess_ent = guessing_entropy(bits)
-    block_ent = block_entropy(bits, block_size=8)
-    cond_ent = conditional_entropy(bits)
-    # For cross/relative entropy, use bits vs. reversed bits as a simple example
-    cross_ent = cross_entropy(bits, bits[::-1])
-    rel_ent = relative_entropy(bits, bits[::-1])
-    lz_ent = lempel_ziv_entropy(bits)
-    spec_ent = spectral_entropy(bits)
-    ms_ent = multi_scale_entropy(bits, max_scale=5)
-    markov_ent = markov_entropy(bits)
-    maurer_fn, maurer_z = maurer_universal_test(bits)
-    print(f"🔹 randtest score         : {rand_score}")
-    print(f"🔹 BiEntropy              : {bien:.6f}")
-    print(f"🔹 Min-Entropy            : {minent:.6f}")
-    print(f"🔹 Collision Entropy      : {collent:.6f}")
-    print(f"🔹 Hartley Entropy        : {hartley:.6f}")
-    print(f"🔹 Rényi Entropy (α=2)    : {renyi2:.6f}")
-    print(f"🔹 Tsallis Entropy (q=2)  : {tsallis2:.6f}")
-    print(f"🔹 Permutation Entropy    : {perm_ent:.6f}")
-    print(f"🔹 Sample Entropy         : {samp_ent:.6f}")
-    print(f"🔹 Guessing Entropy       : {guess_ent:.6f}")
-    print(f"🔹 Block Entropy (8)      : {block_ent:.6f}")
-    print(f"🔹 Conditional Entropy    : {cond_ent:.6f}")
-    print(f"🔹 Cross Entropy (rev)    : {cross_ent:.6f}")
-    print(f"🔹 Relative Entropy (rev) : {rel_ent:.6f}")
-    print(f"🔹 Lempel-Ziv Entropy     : {lz_ent:.6f}")
-    print(f"🔹 Spectral Entropy       : {spec_ent:.6f}")
-    print(f"🔹 Multi-Scale Entropy    : {ms_ent:.6f}")
-    print(f"🔹 Markov Entropy         : {markov_ent:.6f}")
-    print(f"🔹 Maurer's Universal Statistic: {maurer_fn:.6f} (z={maurer_z:.2f})\n")
-
-    # Basic Tests
-    print("[📊] Basic Key Strength Tests")
-    entropy = shannon_entropy(bits)
-    s, ones, zeros, bias = frequency_monobit(bits)
-    r, exp_r, runs_diff = runs_stat(bits)
-    chi, p_chi = chi_square_stat(bits)
-
-    basic = [
-        ("Shannon Entropy", entropy, entropy >= 0.997, "threshold ≥ 0.997"),
-        ("Monobit Bias", bias, bias <= 0.01, f"ones={ones}, zeros={zeros}"),
-        ("Runs Deviation", runs_diff, runs_diff <= 0.01, f"runs={r}, exp≈{int(exp_r)}"),
-        ("Chi‑Square p", p_chi, p_chi >= 0.05, "threshold ≥ 0.05"),
+    # --- Entropy Estimators ---
+    print("[Entropy Estimators]")
+    bits_float = [float(b) for b in bits]
+    entropy_tests = [
+        ("Shannon Entropy", lambda: shannon_entropy(bits)),
+        ("Min-Entropy", lambda: min_entropy(bits)),
+        ("Collision Entropy", lambda: collision_entropy(bits)),
+        ("Hartley Entropy", lambda: hartley_entropy(bits)),
+        ("Rényi Entropy (α=2)", lambda: renyi_entropy(bits, alpha=2)),
+        ("Tsallis Entropy (q=2)", lambda: tsallis_entropy(bits, q=2)),
+        ("Sample Entropy", lambda: sample_entropy(bits, m=2)),
+        ("Permutation Entropy", lambda: permutation_entropy(bits, order=3)),
+        ("Block Entropy (8)", lambda: block_entropy(bits, block_size=8)),
+        ("Conditional Entropy", lambda: conditional_entropy(bits)),
+        ("Cross Entropy (rev)", lambda: cross_entropy(bits, bits[::-1])),
+        ("Relative Entropy (rev)", lambda: relative_entropy(bits, bits[::-1])),
+        ("Lempel-Ziv Entropy", lambda: lempel_ziv_entropy(bits)),
+        ("Spectral Entropy", lambda: spectral_entropy(bits)),
+        ("Multi-Scale Entropy", lambda: multi_scale_entropy(bits, max_scale=5)),
+        ("Markov Entropy", lambda: markov_entropy(bits)),
+        ("Maurer's Universal Statistic", lambda: maurer_universal_test(bits)[0]),
+        ("pyentrp Shannon Entropy", lambda: ent.shannon_entropy(bits_float)),
+        ("pyentrp Sample Entropy", lambda: ent.sample_entropy(bits_float, 2, 0.2)),
+        (
+            "pyentrp Multi-Scale Entropy",
+            lambda: ent.multiscale_entropy(bits_float, 2, 0.2, maxscale=5),
+        ),
+        (
+            "pyentrp Perm Entropy",
+            lambda: ent.permutation_entropy(bits_float, 3, delay=1, normalize=True),
+        ),
+        (
+            "pyentrp Multi-Scale Perm Entropy",
+            lambda: ent.multiscale_permutation_entropy(bits_float, 3, 1, 5),
+        ),
+        (
+            "pyentrp Weighted Perm Entropy",
+            lambda: ent.weighted_permutation_entropy(bits_float, 3, 1, normalize=True),
+        ),
+        (
+            "pyentrp Composite Multi-Scale Entropy",
+            lambda: ent.composite_multiscale_entropy(bits_float, 2, 5),
+        ),
     ]
-    passed_basic = sum(ok for _, _, ok, _ in basic)
-    for name, val, ok, note in basic:
-        log_test_result(name, val, ok, "" if ok else note)
+    entropy_results = []
+    with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
+        future_to_name = {executor.submit(fn): name for name, fn in entropy_tests}
+        for fut in as_completed(future_to_name):
+            name = future_to_name[fut]
+            try:
+                val = fut.result()
+            except Exception as e:
+                val = f"N/A ({e})"
+            entropy_results.append((name, val))
+    # Print in order
+    for name, _ in entropy_tests:
+        for r in entropy_results:
+            if r[0] == name:
+                print(f"{r[0]}: {r[1]}")
+                break
     print()
 
-    # NIST SP800‑22
-    print("[🧪] NIST SP800‑22 Full Battery")
+    # --- Statistical/Randomness Tests ---
+    print("[Statistical/Randomness Tests]")
+    stat_tests = [
+        ("randtest score", lambda: random_score(bits)),
+        ("Monobit Bias", lambda: frequency_monobit(bits)[3]),
+        ("Runs Deviation", lambda: runs_stat(bits)[2]),
+        ("Chi‑Square p", lambda: chi_square_stat(bits)[1]),
+    ]
+    stat_results = []
+    with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
+        future_to_name = {executor.submit(fn): name for name, fn in stat_tests}
+        for fut in as_completed(future_to_name):
+            name = future_to_name[fut]
+            try:
+                val = fut.result()
+            except Exception as e:
+                val = f"N/A ({e})"
+            stat_results.append((name, val))
+    for name, _ in stat_tests:
+        for r in stat_results:
+            if r[0] == name:
+                print(f"{r[0]}: {r[1]}")
+                break
+    print()
+
+    # --- NIST SP800-22 Tests ---
+    print("[NIST SP800-22 Tests]")
     bitstr = "".join(map(str, bits[:2_000_000]))
     suite = [
         ("Monobit", FrequencyTest.FrequencyTest.monobit_test),
@@ -433,25 +518,27 @@ def main():
         ("Random Excursion", RandomExcursions.RandomExcursions.random_excursions_test),
         ("Random Excursion Variant", RandomExcursions.RandomExcursions.variant_test),
     ]
-
-    with ProcessPoolExecutor() as exec:
-        futures = [exec.submit(run_nist_test, name, fn, bitstr) for name, fn in suite]
-        results = [f.result() for f in futures]
-
-    passed_suite = sum(1 for _, _, ok, _ in results if ok)
-    for name, pval, ok, note in results:
-        log_test_result(name, pval, ok, note)
-
+    results = []
+    with ProcessPoolExecutor() as executor:
+        futures = {
+            executor.submit(run_nist_test, name, fn, bitstr): name for name, fn in suite
+        }
+        for fut in as_completed(futures):
+            name, pval, ok, note = fut.result()
+            results.append((name, pval, ok, note))
+    # Print in suite order
+    for name, _, _, _ in suite:
+        for r in results:
+            if r[0] == name:
+                print(
+                    f"{r[0]}: p={r[1]} {'PASS' if r[2] else 'FAIL' if r[2] is False else 'SKIP'} {r[3]}"
+                )
+                break
+    print()
     total_time = time.time() - start_time
-
-    print(f"\n📋 Basic: 4 total, {passed_basic} passed, {4 - passed_basic} failed")
-    n_fail = sum(1 for _, _, ok, _ in results if ok is False)
-    n_skip = sum(1 for _, _, ok, _ in results if ok is None)
-    print(
-        f"📋 NIST: {len(suite)} total, {passed_suite} passed, {n_fail} failed, {n_skip} skipped"
-    )
-    print(f"⏱ Total runtime: {total_time:.2f} sec")
+    print(f"Total runtime: {total_time:.2f} sec")
 
 
 if __name__ == "__main__":
+    freeze_support()
     main()

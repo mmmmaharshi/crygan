@@ -139,12 +139,14 @@ dependencies = [
     { name = "matplotlib" },
     { name = "numpy" },
     { name = "pycryptodome" },
+    { name = "pyentrp" },
     { name = "qrcode", extra = ["pil"] },
     { name = "randtest" },
     { name = "requests" },
     { name = "scipy" },
     { name = "sounddevice" },
     { name = "statsmodels" },
+    { name = "termcolor" },
     { name = "torch" },
     { name = "tqdm" },
 ]
@@ -156,12 +158,14 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.10.3" },
     { name = "numpy", specifier = ">=2.3.0" },
     { name = "pycryptodome", specifier = ">=3.23.0" },
+    { name = "pyentrp", specifier = ">=1.0.0" },
     { name = "qrcode", extras = ["pil"], specifier = ">=8.2" },
     { name = "randtest", specifier = ">=0.7" },
     { name = "requests", specifier = ">=2.32.4" },
     { name = "scipy", specifier = ">=1.15.3" },
     { name = "sounddevice", specifier = ">=0.5.2" },
     { name = "statsmodels", specifier = ">=0.14.4" },
+    { name = "termcolor", specifier = ">=3.1.0" },
     { name = "torch", specifier = ">=2.7.1" },
     { name = "tqdm", specifier = ">=4.67.1" },
 ]
@@ -660,6 +664,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pyentrp"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f5/6a/de6bffe13e5fdb577fad1d2c992488bd0c64fca43c8e7f02bbc92d9d2cd7/pyentrp-1.0.0.tar.gz", hash = "sha256:afefcb02278bdf4dc167aa0c4887ab298dbedd9bc159ec4f47079f11f56dfe22", size = 10525 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/04/af/8d1fc63db0f4e56a410ca8e8368c26c6840f5d95729a7db149aaaba89785/pyentrp-1.0.0-py3-none-any.whl", hash = "sha256:9bf8fa278c56dbe68833c703e9edb042f8b2a8850cc3a9a3d76070984e5c7c00", size = 10820 },
+]
+
+[[package]]
 name = "pyparsing"
 version = "3.2.3"
 source = { registry = "https://pypi.org/simple" }
@@ -823,6 +839,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/83/d3/803453b36afefb7c2bb238361cd4ae6125a569b4db67cd9e79846ba2d68c/sympy-1.14.0.tar.gz", hash = "sha256:d3d3fe8df1e5a0b42f0e7bdf50541697dbe7d23746e894990c030e2b05e72517", size = 7793921 }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl", hash = "sha256:e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5", size = 6299353 },
+]
+
+[[package]]
+name = "termcolor"
+version = "3.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ca/6c/3d75c196ac07ac8749600b60b03f4f6094d54e132c4d94ebac6ee0e0add0/termcolor-3.1.0.tar.gz", hash = "sha256:6a6dd7fbee581909eeec6a756cff1d7f7c376063b14e4a298dc4980309e55970", size = 14324 }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/4f/bd/de8d508070629b6d84a30d01d57e4a65c69aa7f5abe7560b8fad3b50ea59/termcolor-3.1.0-py3-none-any.whl", hash = "sha256:591dd26b5c2ce03b9e43f391264626557873ce1d379019786f99b0c2bee140aa", size = 7684 },
 ]
 
 [[package]]
