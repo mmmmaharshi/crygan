@@ -4,7 +4,7 @@ import random
 from collections import Counter
 from hashlib import sha256
 from math import log2
-from multiprocessing import Pool, cpu_count, freeze_support
+from multiprocessing import cpu_count, freeze_support
 
 import numpy as np
 import qrcode
@@ -50,26 +50,44 @@ def extract_bits_hashed(args):
     return np.unpackbits(np.frombuffer(h, dtype=np.uint8))
 
 
+def _extract_file_entropy(args):
+    path, count_per_file = args
+    sr, data = wav.read(path)
+    if data.dtype == np.int16:
+        data = data / 32768.0
+    if data.ndim > 1:
+        data = data[:, 0]
+    segment_len_samples = 1024
+    args_list = [(data, i, segment_len_samples) for i in range(count_per_file)]
+    file_segments = []
+    for r in tqdm(args_list, desc=f"[⚙️] Segments from {os.path.basename(path)}"):
+        bits = extract_bits_hashed(r)
+        if bits is not None:
+            file_segments.append(bits)
+    return os.path.basename(path), file_segments
+
+
 def load_entropy(paths, count_per_file=1024):
+    from multiprocessing import Pool as OuterPool
+    from multiprocessing import cpu_count as mp_cpu_count
+
+    n_cores = mp_cpu_count()
+    print("\n+------------------- Entropy Extraction Summary -------------------+")
+    print(f"| [🧠] Using {n_cores} CPU cores for parallel extraction.")
+    print(f"| [🎵] Processing entropy from: {', '.join(paths)}")
+    print("+---------------------------------------------------------------+")
+    with OuterPool() as pool:
+        results = pool.map(
+            _extract_file_entropy, [(path, count_per_file) for path in paths]
+        )
+    print("|  Source File         | Segments Loaded   | Bits per Segment   |")
+    print("|----------------------|-------------------|--------------------|")
     all_segments = []
-    for path in paths:
-        print(f"\n[🎵] Processing entropy from: {path}")
-        sr, data = wav.read(path)
-        if data.dtype == np.int16:
-            data = data / 32768.0
-        if data.ndim > 1:
-            data = data[:, 0]
-
-        segment_len_samples = 1024
-        args_list = [(data, i, segment_len_samples) for i in range(count_per_file)]
-
-        with Pool() as pool:
-            for r in tqdm(
-                pool.imap_unordered(extract_bits_hashed, args_list),
-                total=count_per_file,
-                desc=f"[⚙️ ] {os.path.basename(path)} segments",
-            ):
-                all_segments.append(r)
+    for fname, file_segments in results:
+        bits_per_segment = file_segments[0].shape[0] if file_segments else 0
+        print(f"| {fname:<20} | {len(file_segments):<17} | {bits_per_segment:<18}|")
+        all_segments.extend(file_segments)
+    print("+---------------------------------------------------------------+\n")
     return np.array(all_segments)
 
 
@@ -145,7 +163,7 @@ def expand_key_hkdf(seed_bits, target_bits=1_000_000, salt=None):
     info = b"gan-key-expansion"
     while len(output) < (target_bits + 7) // 8:
         h = HMAC(prk, hashes.SHA256(), backend=default_backend())
-        h.update(prev + info + bytes([counter]))
+        h.update(prev + info + counter.to_bytes(4, "big"))
         prev = h.finalize()
         output.extend(prev)
         counter += 1
@@ -165,6 +183,10 @@ def save_checkpoint(G, D, epoch):
 
 # === MAIN ===
 def main():
+    print("=== CRYGAN PARALLEL ENTROPY EXTRACTION ===")
+
+    print(f"[🧠] Using {cpu_count()} CPU cores.")
+
     set_seed(seed)
     torch.set_num_threads(cpu_count())
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -173,7 +195,6 @@ def main():
     os.makedirs("outputs/logs", exist_ok=True)
 
     real_keys = load_entropy(entropy_sources, count_per_file=1024)
-    print(f"[✓] Loaded {real_keys.shape[0]} × {real_keys.shape[1]} bits")
 
     G, D = Generator().to(device), Discriminator().to(device)
     opt_G = optim.Adam(G.parameters(), lr=lr, betas=(0.5, 0.9))
