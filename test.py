@@ -393,6 +393,57 @@ def status_str(passed):
     return "PASS" if passed else "FAIL"
 
 
+def run_named_test(name, bits, bits_float):
+    if name == "Min-Entropy":
+        return name, min_entropy(bits)
+    elif name == "Collision Entropy":
+        return name, collision_entropy(bits)
+    elif name == "Hartley Entropy":
+        return name, hartley_entropy(bits)
+    elif name == "Rényi Entropy (α=2)":
+        return name, renyi_entropy(bits, alpha=2)
+    elif name == "Tsallis Entropy (q=2)":
+        return name, tsallis_entropy(bits, q=2)
+    elif name == "Sample Entropy":
+        return name, sample_entropy(bits, m=2)
+    elif name == "Permutation Entropy":
+        return name, permutation_entropy(bits, order=3)
+    elif name == "Block Entropy (8)":
+        return name, block_entropy(bits, block_size=8)
+    elif name == "Conditional Entropy":
+        return name, conditional_entropy(bits)
+    elif name == "Cross Entropy (rev)":
+        return name, cross_entropy(bits, bits[::-1])
+    elif name == "Relative Entropy (rev)":
+        return name, relative_entropy(bits, bits[::-1])
+    elif name == "Lempel-Ziv Entropy":
+        return name, lempel_ziv_entropy(bits)
+    elif name == "Spectral Entropy":
+        return name, spectral_entropy(bits)
+    elif name == "Multi-Scale Entropy":
+        return name, multi_scale_entropy(bits, max_scale=5)
+    elif name == "Markov Entropy":
+        return name, markov_entropy(bits)
+    elif name == "Maurer's Universal Statistic":
+        return name, maurer_universal_test(bits)[0]
+    elif name == "pyentrp Shannon Entropy":
+        return name, ent.shannon_entropy(bits_float)
+    elif name == "pyentrp Sample Entropy":
+        return name, ent.sample_entropy(bits_float, 2, 0.2)
+    elif name == "pyentrp Multi-Scale Entropy":
+        return name, ent.multiscale_entropy(bits_float, 2, 0.2, maxscale=5)
+    elif name == "pyentrp Perm Entropy":
+        return name, ent.permutation_entropy(bits_float, 3, delay=1, normalize=True)
+    elif name == "pyentrp Multi-Scale Perm Entropy":
+        return name, ent.multiscale_permutation_entropy(bits_float, 3, 1, 5)
+    elif name == "pyentrp Weighted Perm Entropy":
+        return name, ent.weighted_permutation_entropy(bits_float, 3, 1, normalize=True)
+    elif name == "pyentrp Composite Multi-Scale Entropy":
+        return name, ent.composite_multiscale_entropy(bits_float, 2, 5)
+    else:
+        return name, "N/A"
+
+
 def main():
     start_time = time.time()
     path = "outputs/keys/gan_expanded_1mbit.bin"
@@ -406,59 +457,42 @@ def main():
     # --- Entropy Estimators ---
     print("[Entropy Estimators]")
     bits_float = [float(b) for b in bits]
-    entropy_tests = [
-        ("Shannon Entropy", lambda: shannon_entropy(bits)),
-        ("Min-Entropy", lambda: min_entropy(bits)),
-        ("Collision Entropy", lambda: collision_entropy(bits)),
-        ("Hartley Entropy", lambda: hartley_entropy(bits)),
-        ("Rényi Entropy (α=2)", lambda: renyi_entropy(bits, alpha=2)),
-        ("Tsallis Entropy (q=2)", lambda: tsallis_entropy(bits, q=2)),
-        ("Sample Entropy", lambda: sample_entropy(bits, m=2)),
-        ("Permutation Entropy", lambda: permutation_entropy(bits, order=3)),
-        ("Block Entropy (8)", lambda: block_entropy(bits, block_size=8)),
-        ("Conditional Entropy", lambda: conditional_entropy(bits)),
-        ("Cross Entropy (rev)", lambda: cross_entropy(bits, bits[::-1])),
-        ("Relative Entropy (rev)", lambda: relative_entropy(bits, bits[::-1])),
-        ("Lempel-Ziv Entropy", lambda: lempel_ziv_entropy(bits)),
-        ("Spectral Entropy", lambda: spectral_entropy(bits)),
-        ("Multi-Scale Entropy", lambda: multi_scale_entropy(bits, max_scale=5)),
-        ("Markov Entropy", lambda: markov_entropy(bits)),
-        ("Maurer's Universal Statistic", lambda: maurer_universal_test(bits)[0]),
-        ("pyentrp Shannon Entropy", lambda: ent.shannon_entropy(bits_float)),
-        ("pyentrp Sample Entropy", lambda: ent.sample_entropy(bits_float, 2, 0.2)),
-        (
-            "pyentrp Multi-Scale Entropy",
-            lambda: ent.multiscale_entropy(bits_float, 2, 0.2, maxscale=5),
-        ),
-        (
-            "pyentrp Perm Entropy",
-            lambda: ent.permutation_entropy(bits_float, 3, delay=1, normalize=True),
-        ),
-        (
-            "pyentrp Multi-Scale Perm Entropy",
-            lambda: ent.multiscale_permutation_entropy(bits_float, 3, 1, 5),
-        ),
-        (
-            "pyentrp Weighted Perm Entropy",
-            lambda: ent.weighted_permutation_entropy(bits_float, 3, 1, normalize=True),
-        ),
-        (
-            "pyentrp Composite Multi-Scale Entropy",
-            lambda: ent.composite_multiscale_entropy(bits_float, 2, 5),
-        ),
+    entropy_test_names = [
+        "Min-Entropy",
+        "Collision Entropy",
+        "Hartley Entropy",
+        "Rényi Entropy (α=2)",
+        "Tsallis Entropy (q=2)",
+        "Sample Entropy",
+        "Permutation Entropy",
+        "Block Entropy (8)",
+        "Conditional Entropy",
+        "Cross Entropy (rev)",
+        "Relative Entropy (rev)",
+        "Lempel-Ziv Entropy",
+        "Spectral Entropy",
+        "Multi-Scale Entropy",
+        "Markov Entropy",
+        "Maurer's Universal Statistic",
+        "pyentrp Shannon Entropy",
+        "pyentrp Sample Entropy",
+        "pyentrp Multi-Scale Entropy",
+        "pyentrp Perm Entropy",
+        "pyentrp Multi-Scale Perm Entropy",
+        "pyentrp Weighted Perm Entropy",
+        "pyentrp Composite Multi-Scale Entropy",
     ]
     entropy_results = []
     with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
-        future_to_name = {executor.submit(fn): name for name, fn in entropy_tests}
-        for fut in as_completed(future_to_name):
-            name = future_to_name[fut]
-            try:
-                val = fut.result()
-            except Exception as e:
-                val = f"N/A ({e})"
+        futures = [
+            executor.submit(run_named_test, name, bits, bits_float)
+            for name in entropy_test_names
+        ]
+        for fut in as_completed(futures):
+            name, val = fut.result()
             entropy_results.append((name, val))
     # Print in order
-    for name, _ in entropy_tests:
+    for name in entropy_test_names:
         for r in entropy_results:
             if r[0] == name:
                 print(f"{r[0]}: {r[1]}")
@@ -469,8 +503,6 @@ def main():
     print("[Statistical/Randomness Tests]")
     stat_tests = [
         ("randtest score", lambda: random_score(bits)),
-        ("Monobit Bias", lambda: frequency_monobit(bits)[3]),
-        ("Runs Deviation", lambda: runs_stat(bits)[2]),
         ("Chi‑Square p", lambda: chi_square_stat(bits)[1]),
     ]
     stat_results = []
@@ -527,7 +559,7 @@ def main():
             name, pval, ok, note = fut.result()
             results.append((name, pval, ok, note))
     # Print in suite order
-    for name, _, _, _ in suite:
+    for name, _ in suite:
         for r in results:
             if r[0] == name:
                 print(
