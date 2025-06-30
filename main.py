@@ -21,18 +21,13 @@ input_bits = 256
 epochs = 3000
 batch_size = 32
 lr = 0.0001
-wav_path = "rain.wav"
 lambda_gp = 10
 critic_iters = 5
+entropy_sources = ["rain.wav", "traffic.wav"]
 
 
 # === ENTROPY FUNCTIONS ===
 def extract_bits_hashed(args):
-    """
-    A more secure entropy extraction method.
-    Hashes a segment of audio data to produce a 256-bit block of entropy.
-    This removes biases and uses the full complexity of the audio segment.
-    """
     data, i, segment_len_samples = args
     start = i * segment_len_samples
     end = start + segment_len_samples
@@ -41,27 +36,28 @@ def extract_bits_hashed(args):
     return np.unpackbits(np.frombuffer(h, dtype=np.uint8))
 
 
-def load_entropy_parallel(path, count=2048, bit_length=256, threshold=0.0005):
-    print(f"[🎵] Extracting entropy from: {path}")
-    sr, data = wav.read(path)
-    if data.dtype == np.int16:
-        data = data / 32768.0
-    if data.ndim > 1:
-        data = data[:, 0]
+def load_entropy(paths, count_per_file=1024):
+    all_segments = []
+    for path in paths:
+        print(f"\n[🎵] Processing entropy from: {path}")
+        sr, data = wav.read(path)
+        if data.dtype == np.int16:
+            data = data / 32768.0
+        if data.ndim > 1:
+            data = data[:, 0]
 
-    # Each segment should have enough data to be unique. 1024 samples is a good start.
-    segment_len_samples = 1024
-    args_list = [(data, i, segment_len_samples) for i in range(count)]
-    results = []
-    with Pool() as pool:
-        for r in tqdm(
-            pool.imap_unordered(extract_bits_hashed, args_list),
-            total=count,
-            desc="[⚙️ ] Entropy Segments",
-        ):
-            if r is not None:
-                results.append(r)
-    return np.array(results)
+        segment_len_samples = 1024
+        args_list = [(data, i, segment_len_samples) for i in range(count_per_file)]
+
+        with Pool() as pool:
+            for r in tqdm(
+                pool.imap_unordered(extract_bits_hashed, args_list),
+                total=count_per_file,
+                desc=f"[⚙️ ] Segments from {os.path.basename(path)}",
+            ):
+                if r is not None:
+                    all_segments.append(r)
+    return np.array(all_segments)
 
 
 # === MODELS ===
@@ -154,7 +150,7 @@ def main():
     os.makedirs("outputs/keys", exist_ok=True)
     os.makedirs("outputs/logs", exist_ok=True)
 
-    real_keys = load_entropy_parallel(wav_path)
+    real_keys = load_entropy(entropy_sources, count_per_file=1024)
     print(f"[✓] Loaded {real_keys.shape[0]} samples × {real_keys.shape[1]} bits")
 
     def shannon_entropy(bits):
