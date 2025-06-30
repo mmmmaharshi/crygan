@@ -308,6 +308,33 @@ def markov_entropy(bits):
     return h
 
 
+def maurer_universal_test(bits, L=7, Q=1280, K=512):
+    # Maurer's Universal Statistical Test for randomness (binary version)
+    n = len(bits)
+    if n < Q + K:
+        return 0, 0
+    T = [0] * (2**L)
+    for i in range(Q):
+        dec = 0
+        for j in range(L):
+            dec = (dec << 1) | bits[i * L + j]
+        T[dec] = i + 1
+    sum_ = 0
+    for i in range(Q, Q + K):
+        dec = 0
+        for j in range(L):
+            dec = (dec << 1) | bits[i * L + j]
+        d = i + 1 - T[dec]
+        T[dec] = i + 1
+        sum_ += np.log2(d)
+    fn = sum_ / K
+    # Expected value and variance for L=7
+    expected = 6.1962507
+    variance = 3.125
+    z = (fn - expected) / np.sqrt(variance / K)
+    return fn, z
+
+
 def main():
     start_time = time.time()
     path = "outputs/keys/gan_expanded_1mbit.bin"
@@ -339,6 +366,7 @@ def main():
     spec_ent = spectral_entropy(bits)
     ms_ent = multi_scale_entropy(bits, max_scale=5)
     markov_ent = markov_entropy(bits)
+    maurer_fn, maurer_z = maurer_universal_test(bits)
     print(f"🔹 randtest score         : {rand_score}")
     print(f"🔹 BiEntropy              : {bien:.6f}")
     print(f"🔹 Min-Entropy            : {minent:.6f}")
@@ -356,7 +384,8 @@ def main():
     print(f"🔹 Lempel-Ziv Entropy     : {lz_ent:.6f}")
     print(f"🔹 Spectral Entropy       : {spec_ent:.6f}")
     print(f"🔹 Multi-Scale Entropy    : {ms_ent:.6f}")
-    print(f"🔹 Markov Entropy         : {markov_ent:.6f}\n")
+    print(f"🔹 Markov Entropy         : {markov_ent:.6f}")
+    print(f"🔹 Maurer's Universal Statistic: {maurer_fn:.6f} (z={maurer_z:.2f})\n")
 
     # Basic Tests
     print("[📊] Basic Key Strength Tests")
