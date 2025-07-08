@@ -1,4 +1,3 @@
-import base64
 import os
 import random
 from collections import Counter
@@ -7,7 +6,6 @@ from math import log2
 from multiprocessing import cpu_count, freeze_support
 
 import numpy as np
-import qrcode
 import scipy.io.wavfile as wav
 import torch
 import torch.nn as nn
@@ -30,8 +28,9 @@ seed = 42
 checkpoint_path = "outputs/checkpoints"
 output_path = "outputs/keys"
 
-torch.set_num_threads(os.cpu_count())
+torch.set_num_threads(os.cpu_count() or 1)
 torch.set_num_interop_threads(1)
+
 
 def set_seed(seed):
     torch.manual_seed(seed)
@@ -40,6 +39,7 @@ def set_seed(seed):
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(seed)
 
+
 def extract_bits_hashed(args):
     data, i, segment_len_samples = args
     start = i * segment_len_samples
@@ -47,6 +47,7 @@ def extract_bits_hashed(args):
     segment = data[start:end]
     h = sha256(segment.tobytes()).digest()
     return np.unpackbits(np.frombuffer(h, dtype=np.uint8))
+
 
 def _extract_file_entropy(args):
     path, count_per_file = args
@@ -64,14 +65,19 @@ def _extract_file_entropy(args):
             file_segments.append(bits)
     return os.path.basename(path), file_segments
 
+
 def load_entropy(paths, count_per_file=1024):
     from multiprocessing import Pool as OuterPool
+
     with OuterPool() as pool:
-        results = pool.map(_extract_file_entropy, [(path, count_per_file) for path in paths])
+        results = pool.map(
+            _extract_file_entropy, [(path, count_per_file) for path in paths]
+        )
     all_segments = []
     for _, file_segments in results:
         all_segments.extend(file_segments)
     return np.array(all_segments)
+
 
 class Generator(nn.Module):
     def __init__(self):
@@ -92,6 +98,7 @@ class Generator(nn.Module):
         noise = torch.randn_like(out) * 0.05
         return out + noise
 
+
 class Discriminator(nn.Module):
     def __init__(self):
         super().__init__()
@@ -105,6 +112,7 @@ class Discriminator(nn.Module):
 
     def forward(self, x):
         return self.net(x)
+
 
 def compute_gradient_penalty(D, real, fake, device):
     alpha = torch.rand(real.size(0), 1, device=device).expand_as(real)
@@ -121,10 +129,12 @@ def compute_gradient_penalty(D, real, fake, device):
     )[0]
     return ((gradients.norm(2, dim=1) - 1) ** 2).mean()
 
+
 def shannon_entropy(bits):
     c = Counter(bits)
     total = len(bits)
     return -sum((f / total) * log2(f / total) for f in c.values())
+
 
 def expand_key_hkdf(seed_bits, target_bits=1_000_000, salt=None):
     seed_bits = seed_bits.copy()
@@ -153,6 +163,7 @@ def expand_key_hkdf(seed_bits, target_bits=1_000_000, salt=None):
     expanded_bits = np.unpackbits(np.frombuffer(final_bytes, dtype=np.uint8))
     return expanded_bits[:target_bits], salt
 
+
 def main():
     set_seed(seed)
     torch.set_num_threads(cpu_count())
@@ -167,14 +178,14 @@ def main():
 
     real_tensor = torch.tensor(real_keys.astype(np.float32), device=device) * 2 - 1
     final_binary = None
-    D_loss = torch.tensor(0.0)
-    G_loss = torch.tensor(0.0)
     progress = tqdm(range(epochs), desc="Epochs")
     for epoch in progress:
         for _ in range(critic_iters):
             idx = np.random.randint(0, real_tensor.shape[0], batch_size)
             real_batch = real_tensor[idx]
-            z = torch.randn(batch_size, latent_dim, device=device) + 0.05 * torch.randn(batch_size, latent_dim, device=device)
+            z = torch.randn(batch_size, latent_dim, device=device) + 0.05 * torch.randn(
+                batch_size, latent_dim, device=device
+            )
             fake_batch = G(z).detach()
             gp = compute_gradient_penalty(D, real_batch, fake_batch, device)
             loss_D = -D(real_batch).mean() + D(fake_batch).mean() + lambda_gp * gp
@@ -182,7 +193,9 @@ def main():
             loss_D.backward()
             opt_D.step()
 
-        z = torch.randn(batch_size, latent_dim, device=device) + 0.05 * torch.randn(batch_size, latent_dim, device=device)
+        z = torch.randn(batch_size, latent_dim, device=device) + 0.05 * torch.randn(
+            batch_size, latent_dim, device=device
+        )
         fake_batch = G(z)
         loss_G = -D(fake_batch).mean()
         opt_G.zero_grad()
@@ -214,6 +227,7 @@ def main():
     with open(os.path.join(output_path, "salt.bin"), "wb") as f:
         f.write(salt)
     print("[✅] 1Mbit expanded key saved.")
+
 
 if __name__ == "__main__":
     freeze_support()

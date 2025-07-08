@@ -3,7 +3,7 @@ name = "crygan"
 version = "0.1.0"
 description = "A research-grade system for cryptographic key generation using hybrid entropy from physical chaotic sources and deep generative models."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.11"
 dependencies = [
     "bitstring>=4.3.1",
     "cryptography>=45.0.4",
