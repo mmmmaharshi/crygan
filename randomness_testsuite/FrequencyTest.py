@@ -55,7 +55,7 @@ class FrequencyTest:
             print('DEBUG END.')
 
         # return a p_value and randomness result
-        return (p_value, (p_value >= 0.01))
+        return float(p_value), bool(p_value >= 0.01)
 
     @staticmethod
     def block_frequency(binary_data:str, block_size=128, verbose=False):

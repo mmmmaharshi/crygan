@@ -30,6 +30,9 @@ seed = 42
 checkpoint_path = "outputs/checkpoints"
 output_path = "outputs/keys"
 
+torch.set_num_threads(os.cpu_count())
+torch.set_num_interop_threads(1)
+
 
 # === REPRODUCIBILITY ===
 def set_seed(seed):
@@ -60,36 +63,26 @@ def _extract_file_entropy(args):
     segment_len_samples = 1024
     args_list = [(data, i, segment_len_samples) for i in range(count_per_file)]
     file_segments = []
-    for r in tqdm(args_list, desc=f"[⚙️] Segments from {os.path.basename(path)}"):
+    for r in tqdm(args_list, leave=False):
         bits = extract_bits_hashed(r)
         if bits is not None:
             file_segments.append(bits)
     return os.path.basename(path), file_segments
 
 
+
 def load_entropy(paths, count_per_file=1024):
     from multiprocessing import Pool as OuterPool
     from multiprocessing import cpu_count as mp_cpu_count
 
-    n_cores = mp_cpu_count()
-    print("\n+------------------- Entropy Extraction Summary -------------------+")
-    print(f"| [🧠] Using {n_cores} CPU cores for parallel extraction.")
-    print(f"| [🎵] Processing entropy from: {', '.join(paths)}")
-    print("+---------------------------------------------------------------+")
     with OuterPool() as pool:
         results = pool.map(
             _extract_file_entropy, [(path, count_per_file) for path in paths]
         )
-    print("|  Source File         | Segments Loaded   | Bits per Segment   |")
-    print("|----------------------|-------------------|--------------------|")
     all_segments = []
-    for fname, file_segments in results:
-        bits_per_segment = file_segments[0].shape[0] if file_segments else 0
-        print(f"| {fname:<20} | {len(file_segments):<17} | {bits_per_segment:<18}|")
+    for _, file_segments in results:
         all_segments.extend(file_segments)
-    print("+---------------------------------------------------------------+\n")
     return np.array(all_segments)
-
 
 # === MODELS ===
 class Generator(nn.Module):
@@ -183,10 +176,6 @@ def save_checkpoint(G, D, epoch):
 
 # === MAIN ===
 def main():
-    print("=== CRYGAN PARALLEL ENTROPY EXTRACTION ===")
-
-    print(f"[🧠] Using {cpu_count()} CPU cores.")
-
     set_seed(seed)
     torch.set_num_threads(cpu_count())
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -206,7 +195,6 @@ def main():
     D_loss = torch.tensor(0.0)
     G_loss = torch.tensor(0.0)
 
-    print("[🚀] Starting WGAN-GP Training...")
     progress = tqdm(range(epochs), desc="Epochs")
     for epoch in progress:
         for _ in range(critic_iters):
@@ -237,9 +225,7 @@ def main():
             g_loss_log.append(G_loss.item())
             d_loss_log.append(D_loss.item())
             final_binary = binary
-            progress.set_description(
-                f"Epochs [D={D_loss.item():.3f}, G={G_loss.item():.3f}, H={ent:.4f}]"
-            )
+            progress.set_description(f"H={ent:.4f}")
 
     if final_binary is None:
         z = torch.randn(1, latent_dim, device=device)
@@ -273,7 +259,6 @@ def main():
 
     print("[✅] 1Mbit expanded key saved.")
     print("[✓] All outputs saved to /outputs/")
-
 
 if __name__ == "__main__":
     freeze_support()
