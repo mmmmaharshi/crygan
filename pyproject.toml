@@ -14,6 +14,7 @@ dependencies = [
     "qrcode[pil]>=8.2",
     "randtest>=0.7",
     "requests>=2.32.4",
+    "scikit-learn>=1.7.0",
     "scipy>=1.15.3",
     "sounddevice>=0.5.2",
     "statsmodels>=0.14.4",

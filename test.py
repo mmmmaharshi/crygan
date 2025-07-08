@@ -5,7 +5,12 @@ from collections import Counter
 from math import log2
 from scipy.stats import chisquare
 from concurrent.futures import ProcessPoolExecutor, wait, FIRST_COMPLETED
+from sklearn.feature_selection import mutual_info_regression
 from tqdm import tqdm
+
+import torch
+import torch.nn as nn
+import torch.optim as optim
 
 from randomness_testsuite import (
     FrequencyTest,
@@ -14,11 +19,13 @@ from randomness_testsuite import (
     Universal,
 )
 
+# === Load Key ===
 def load_key_bin(path):
     with open(path, "rb") as f:
         return np.unpackbits(np.frombuffer(f.read(), dtype=np.uint8))
 
-# === Entropy Functions ===
+
+# === Entropy Metrics ===
 def shannon_entropy(bits):
     c = Counter(bits)
     total = len(bits)
@@ -62,8 +69,6 @@ def markov_entropy(bits):
     for i in range(len(bits) - 1):
         trans[f"{bits[i]}{bits[i + 1]}"] += 1
     total = sum(trans.values())
-    if total == 0:
-        return 0
     return -sum((v / total) * log2(v / total) for v in trans.values() if v > 0)
 
 def chi_square_stat(bits):
@@ -72,7 +77,49 @@ def chi_square_stat(bits):
     chi, p = chisquare([cnt0, cnt1])
     return chi, p
 
-# === Parallel Test Execution ===
+
+# === Cryptanalytic Resistance Tests ===
+def seed_key_correlation(bits):
+    try:
+        seed = bits[:256].astype(float)
+        key = bits[256:512].astype(float)
+        if len(seed) != 256 or len(key) != 256:
+            return "Insufficient length"
+        return np.corrcoef(seed, key)[0, 1]
+    except Exception as e:
+        return f"Error: {e}"
+
+def key_invertibility(bits):
+    z = torch.randn(1000, 100)
+    try:
+        k = torch.tensor(bits[:1000 * 256].reshape(-1, 256)).float()
+        model = nn.Sequential(
+            nn.Linear(256, 128),
+            nn.ReLU(),
+            nn.Linear(128, 100)
+        )
+        opt = optim.Adam(model.parameters(), lr=1e-3)
+        for _ in range(20):
+            pred = model(k)
+            loss = ((pred - z) ** 2).mean()
+            opt.zero_grad()
+            loss.backward()
+            opt.step()
+        return ((model(k) - z) ** 2).mean().item()
+    except Exception as e:
+        return f"Error: {e}"
+
+def mutual_information_mine(bits):
+    try:
+        z = np.random.randn(2000, 100)
+        k = bits[:2000 * 256].reshape(-1, 256)
+        mi = mutual_info_regression(z, k[:, 0], discrete_features=False)
+        return np.mean(mi)
+    except:
+        return 0.0
+
+
+# === Wrapper ===
 def run_named_test(name, bits, bits_float):
     if name == "Monobit Test":
         return name, FrequencyTest.FrequencyTest.monobit_test(bits)
@@ -96,24 +143,43 @@ def run_named_test(name, bits, bits_float):
         return name, Universal.Universal.statistical_test("".join(map(str, bits)))
     elif name == "Spectral Entropy":
         return name, Spectral.SpectralTest.spectral_test(bits_float) if len(bits_float) >= 32 else 0.0
-    else:
+    elif name == "Seed-Key Correlation":
+        return name, seed_key_correlation(bits)
+    elif name == "Key Invertibility":
+        return name, key_invertibility(bits)
+    elif name == "Mutual Information (MINE)":
+        return name, mutual_information_mine(bits)
+    elif name == "Seed-Key Prediction":
         return name, "N/A"
+    return name, "N/A"
 
+
+# === Pass/Fail Logic ===
 def is_pass(name, val):
-    if name in ["Shannon Entropy", "Min Entropy", "Collision Entropy"]:
-        return val >= 0.95
-    elif name == "Markov Entropy":
-        return val >= 1.90
-    elif name == "Permutation Entropy":
-        return val >= 2.5
-    elif name == "Sample Entropy":
-        return val >= 0.8
-    elif isinstance(val, tuple):
-        return val[1] is True if len(val) == 2 else None
-    elif isinstance(val, float):
-        return val >= 0.01
-    return None
+    try:
+        if name in ["Shannon Entropy", "Min Entropy", "Collision Entropy"]:
+            return float(val) >= 0.95
+        elif name == "Markov Entropy":
+            return float(val) >= 1.90
+        elif name == "Permutation Entropy":
+            return float(val) >= 2.5
+        elif name == "Sample Entropy":
+            return float(val) >= 0.8
+        elif name == "Seed-Key Correlation":
+            return abs(val) < 0.05 if isinstance(val, float) else None
+        elif name == "Key Invertibility":
+            return float(val) > 1.0
+        elif name == "Mutual Information (MINE)":
+            return float(val) < 0.05
+        elif isinstance(val, float):
+            return val >= 0.01
+        elif isinstance(val, tuple):
+            return val[1] is True
+    except Exception:
+        return None
 
+
+# === Main ===
 def main():
     start_time = time.time()
     path = "outputs/keys/gan_expanded_1mbit.bin"
@@ -123,7 +189,6 @@ def main():
 
     bits = load_key_bin(path)
     bits_float = bits.astype(float)
-
     print(f"Loaded {len(bits)} bits\n")
 
     test_names = [
@@ -138,6 +203,7 @@ def main():
         "Markov Entropy",
         "Maurer's Universal Test",
         "Spectral Entropy",
+        "Mutual Information (MINE)",
     ]
 
     test_results = []
@@ -168,17 +234,17 @@ def main():
         for rname, val in test_results:
             if rname == name:
                 passed = is_pass(name, val)
-                if isinstance(val, float):
-                    val_str = f"{val:.10f}"
-                elif isinstance(val, tuple):
-                    val_str = f"{val[0]:.10f}" if isinstance(val[0], float) else str(val)
-                else:
-                    val_str = str(val)
+                val_str = (
+                    f"{val:.10f}" if isinstance(val, float)
+                    else f"{val[0]:.10f}" if isinstance(val, tuple) and isinstance(val[0], float)
+                    else str(val)
+                )
                 status = "✅ Passed" if passed else "❌ Failed" if passed is not None else "⚠️ N/A"
-                print(f"{name:<25}: {val_str}  -->  {status}")
+                print(f"{name:<30}: {val_str}  -->  {status}")
                 break
 
     print(f"\n⏱ Total runtime: {time.time() - start_time:.2f} sec")
+
 
 if __name__ == "__main__":
     main()
