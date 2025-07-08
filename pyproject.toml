@@ -1,7 +1,7 @@
 [project]
 name = "crygan"
 version = "0.1.0"
-description = "A research-grade system for cryptographic key generation using hybrid entropy from physical chaotic sources and deep generative models."
+description = "CryGAN is a lightweight adversarial system that generates high-entropy cryptographic keys using a WGAN-GP (Wasserstein GAN with Gradient Penalty), seeded from chaotic physical entropy sources."
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
