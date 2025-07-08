@@ -1,29 +1,19 @@
-# Hybrid GAN–Physical Chaotic Seeding for Cryptographic Key Generation
+## 🚧 WIP 🚧
 
-A research-grade, modular, and reproducible pipeline for cryptographic key generation using hybrid entropy from physical chaotic sources and deep generative adversarial networks (GANs). This system is designed for robust, high-entropy key synthesis, with comprehensive randomness and entropy validation.
+# CryGAN: Physical Chaotic Seeding for Cryptographic Key Generation
 
----
+CryGAN is a lightweight adversarial system that generates high-entropy cryptographic keys using a WGAN-GP (Wasserstein GAN with Gradient Penalty), seeded from chaotic physical entropy sources such as environmental audio (e.g., rain, traffic). The model learns the entropy distribution and synthesizes 256-bit cryptographic keys, which are later expanded to 1 Mbit using HKDF. The system supports full testing, evaluation, and export of the keys in multiple formats.
 
-## 📚 Table of Contents
-- [Overview](#overview)
-- [Pipeline Architecture](#pipeline-architecture)
-- [Components](#components)
-  - [1. Entropy Extraction](#1-entropy-extraction)
-  - [2. GAN Training](#2-gan-training)
-  - [3. Key Expansion](#3-key-expansion)
-  - [4. Output Formats](#4-output-formats)
-  - [5. Randomness & Entropy Testing](#5-randomness--entropy-testing)
-- [How to Run](#how-to-run)
-- [Configuration](#configuration)
-- [Results & Validation](#results--validation)
-- [References](#references)
 
----
+## Methodology
 
-## Overview
-This project combines physical noise (WAV audio) with a GAN to generate high-entropy binary keys. A 256-bit GAN-generated seed is cryptographically expanded using HKDF (SHA-256) to produce a 1,000,000-bit bitstream. Final outputs are validated using a comprehensive suite of entropy and randomness tests, including NIST SP800-22 and pyentrp estimators.
+- **Chaotic Entropy Seeding**: Audio files are segmented and passed through SHA-256 to extract randomness at the bit level.
+- **Generator (G)**: MLP with dropout and Gaussian noise injection, designed to produce binary-like high-entropy vectors.
+- **Discriminator (D)**: MLP with LeakyReLU activations trained under the WGAN-GP framework.
+- **Training**: Conducted over adversarial epochs with gradient penalty for stable convergence.
+- **Key Expansion**: Final 256-bit output from G is expanded to 1,000,000 bits using HKDF (SHA-256).
+- **Export**: Keys are saved in `.bin`, `.hex`, `.b64`, `.npy`, and QR code formats.
 
----
 
 ## Pipeline Architecture
 
@@ -31,110 +21,76 @@ This project combines physical noise (WAV audio) with a GAN to generate high-ent
 [Physical Entropy Sources (WAV)]
         │
         ▼
-[Entropy Extraction & Hashing]
+[Entropy Extraction via SHA-256 (bit-level)]
         │
         ▼
-[GAN Training (WGAN-GP)]
+[Adversarial Training (WGAN-GP)]
         │
         ▼
-[Best GAN Output (256 bits)]
+[GAN Output (256-bit Key Candidate)]
         │
         ▼
-[HKDF Expansion (SHA-256)]
+[HKDF Expansion (SHA-256, IKM = GAN Output)]
         │
         ▼
-[1,000,000-bit Key]
+[Expanded 1,000,000-bit Key]
         │
         ▼
 [Randomness & Entropy Test Suite]
 ```
 
----
+## Evaluation Metrics
 
-## Components
+CryGAN’s keys are evaluated with 12 randomness tests:
+- **Statistical Tests**: Monobit, Chi-Square, Runs, Maurer’s Universal
+- **Entropy Measures**: Shannon, Min, Collision, Markov, Spectral, Permutation, Sample
+- **Information-Theoretic**: MINE (Mutual Information Neural Estimation)
 
-### 1. Entropy Extraction
-- **Sources:** Physical chaotic signals (e.g., `rain.wav`, `traffic.wav`)
-- **Process:**
-  - Audio is segmented and hashed (SHA-256) to extract unbiased, high-entropy bitstrings.
-  - Segments are processed in parallel for speed.
-- **Output:** Numpy array of binary segments, each segment = 256 bits.
+## Usage & Results
 
-### 2. GAN Training
-- **Model:** Wasserstein GAN with Gradient Penalty (WGAN-GP)
-- **Generator:** Maps latent noise (100D) to 256-bit binary output.
-- **Discriminator:** Distinguishes real entropy segments from generated ones.
-- **Training:**
-  - Uses real entropy segments as positive samples.
-  - Tracks entropy of generated samples during training.
-  - Saves checkpoints and logs entropy/loss metrics.
+This section demonstrates the key generation and evaluation process.
 
-### 3. Key Expansion
-- **Seed:** Best GAN-generated 256-bit output.
-- **Expansion:**
-  - HKDF (HMAC-SHA256) expands the seed to 1,000,000 bits.
-  - Salt is randomly generated and saved for reproducibility.
-- **Output:** Expanded key as binary, hex, base64, and QR code.
+### 1. Key Generation
 
-### 4. Output Formats
-- `gan_generated_key.bin` — Raw binary key (256 bits)
-- `gan_generated_key.npy` — Numpy array (256 bits)
-- `key.hex` — Hexadecimal string
-- `key.b64` — Base64 string
-- `key_qr.png` — QR code of base64 key
-- `gan_expanded_1mbit.bin` — 1,000,000-bit expanded key
-- `salt.bin` — HKDF salt
-- `logs/training_metrics.csv` — Training/entropy logs
+The `main.py` script runs the WGAN-GP model to generate a 256-bit key and then expands it to 1 Mbit using HKDF.
 
-### 5. Randomness & Entropy Testing
-- **Test Suite:** `test.py` runs all tests in parallel, results are categorized and minimal.
-- **Categories:**
-  - **Entropy Estimators:**
-    - Min-Entropy, Collision, Hartley, Rényi, Tsallis, Sample, Permutation, Block, Conditional, Cross, Relative, Lempel-Ziv, Spectral, Multi-Scale, Markov, Maurer's Universal, pyentrp estimators
-  - **Statistical/Randomness Tests:**
-    - randtest score, Chi-Square p-value
-  - **NIST SP800-22 Tests:**
-    - Monobit, Block Frequency, Runs, Longest Run, DFT, Non-overlap Template, Overlapping Template, Universal, Linear Complexity, Serial, Approximate Entropy, Cumulative Sums, Random Excursion, Random Excursion Variant
-- **Multiprocessing:** All tests run in parallel for speed.
-- **Output:** Results are printed in original order, with clear PASS/FAIL/SKIP and error notes.
+```bash
+>> uv run main.py
+```
+```bash
+H=0.9996: 100% | 1000/1000 [00:56<00:00, 17.67it/s]
+[📦] Final entropy: 0.9996
+[✅] 1Mbit expanded key saved.
+```
 
----
+### 2. Randomness Testing
 
-## How to Run
+The `test.py` script loads the generated 1 Mbit key and subjects it to a comprehensive suite of 12 statistical and entropy-based tests.
 
-1. **Install dependencies:**
-   ```bash
-   pip install -r requirements.txt
-   ```
-2. **Place entropy WAV files** in the project root (e.g., `rain.wav`, `traffic.wav`).
-3. **Run the main pipeline:**
-   ```bash
-   python main.py
-   ```
-4. **Run the test suite:**
-   ```bash
-   python test.py
-   ```
+```bash
+>> uv run test.py
+```
+```
+Loaded 1000000 bits
 
----
+[🧪] Testing : 100%|12/12 [00:10<00:00, 1.16it/s]
 
-## Configuration
-- All main parameters (GAN, entropy, expansion) are set at the top of `main.py`.
-- Output and checkpoint paths are configurable.
-- Add or change entropy sources by editing the `entropy_sources` list.
+Results:
 
----
+Monobit Test          : 1.0000000000  -->  ✅ Passed
+Chi-Square Test       : 0.6269671659  -->  ✅ Passed
+Runs Test             : 0.2208630293  -->  ✅ Passed
+Permutation Entropy   : 2.9999962464  -->  ✅ Passed
+Sample Entropy        : 1.0000010992  -->  ✅ Passed
+Shannon Entropy       : 0.9999998296  -->  ✅ Passed
+Min Entropy           : 0.9992990205  -->  ✅ Passed
+Collision Entropy     : 0.9999996592  -->  ✅ Passed
+Markov Entropy        : 1.9999985799  -->  ✅ Passed
+Maurer's Universal Test : 0.9331389526  -->  ✅ Passed
+Spectral Entropy      : 0.6863806151  -->  ✅ Passed
+Mutual Information (MINE): 0.0046312641  -->  ✅ Passed
 
-## Results & Validation
-- All outputs are saved in the `outputs/` directory.
-- The test suite provides a full breakdown of entropy and randomness properties.
-- Training logs and metrics are available for reproducibility and analysis.
+⏱ Total runtime: 11.23 sec
+```
 
----
-
-## References
-- NIST SP800-22: A Statistical Test Suite for Random and Pseudorandom Number Generators
-- pyentrp: Entropy and complexity estimators in Python
-- WGAN-GP: Improved Training of Wasserstein GANs
-- HKDF: RFC 5869 HMAC-based Extract-and-Expand Key Derivation Function
-- [Project Author/Contact]
+> This output confirms that the generated key successfully passes all randomness and entropy evaluations, validating the effectiveness of the CryGAN system.
